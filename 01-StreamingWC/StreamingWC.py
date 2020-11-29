@@ -24,6 +24,8 @@ if __name__ == "__main__":
 
     # words_df = lines_df.select(explode(split("value", " ")).alias("word"))
     words_df = lines_df.select(expr("explode(split(value,' ')) as word"))
+    # A more elegant way than the above line
+    # words_df = lines_df.selectExpr("explode(split(value,' ')) as word")
     counts_df = words_df.groupBy("word").count()
 
     word_count_query = counts_df.writeStream \
