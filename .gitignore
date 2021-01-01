@@ -6,6 +6,7 @@
 */app-logs*
 *__pycache__*
 */chk-point-dir*
+*chk-point-dir*
 
 *.crc
 */*/_SUCCESS

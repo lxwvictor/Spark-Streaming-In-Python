@@ -14,6 +14,7 @@ if __name__ == "__main__":
 
     logger = Log4j(spark)
 
+    # Read
     lines_df = spark.readStream \
         .format("socket") \
         .option("host", "localhost") \
@@ -22,12 +23,14 @@ if __name__ == "__main__":
 
     # lines_df.printSchema()
 
+    # Transform
     # words_df = lines_df.select(explode(split("value", " ")).alias("word"))
     words_df = lines_df.select(expr("explode(split(value,' ')) as word"))
     # A more elegant way than the above line
     # words_df = lines_df.selectExpr("explode(split(value,' ')) as word")
     counts_df = words_df.groupBy("word").count()
 
+    # Sink
     word_count_query = counts_df.writeStream \
         .format("console") \
         .outputMode("complete") \
