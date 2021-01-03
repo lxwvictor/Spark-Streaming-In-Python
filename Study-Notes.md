@@ -136,5 +136,83 @@ Almost the same with previous sections, except avro has it's own schema syntax.
 
 # Event time and Windowing
 ## Windowing Aggregates
-- Tumbling Time Window
-- Sliding Time Window
+- Tumbling Time Window: non-overlapping window
+- Sliding Time Window: (can be) overlapping window
+
+# Tumbling Windows aggregate
+Spark stream does not support aggregates cross windows. In order to calculate the buy sell total over all transactions. Streaming can be used to process heavy lifting tasks. Create separate application to handle the analytics.
+
+In the particular `TumblingWindowDemo.py` we can change `kafka_df = spark.readStream()` to `kafka_df = spark.read()`, uncomment the part of `final_output_df` and comment the streaming `window_query`. The code will change to batch processing.
+
+# Watermarking your windows
+State store is maintained in executor memory, so a late arriving message can also be aggregated to the correct window frame. This leads to the need of windows expiration, if not, we will run into OOM. Such a mechanism is named watermark.
+
+Two key business questions of watermark
+- What is the maximum possible delay?
+- When later records are not relevant?
+
+Code example of using watermark. Key points:
+1. The watermark is before `groupBy`
+2. The event column of watermark is the same as `groupBy`
+```
+window_agg_df = trade_df \
+    .withWatermark("CreatedTime", "30 minute") \
+    .groupBy(window(col("CreatedTime"), "15 minute")) \
+```
+
+Max (event time) - watermark = watermark boundary
+
+Analysis of the particular `WatermarkDemo.py` script.
+- `{"CreatedTime": "2019-02-05 10:48:00", "Type": "SELL", "Amount": 600, "BrokerCode": "ABX"}` sets the watermark boundary to `10:18:00`, so Spark expires the time window of `10:00:00` to `10:15:00` and cleans the state store.
+- Thus, the last 2 events `{"CreatedTime": "2019-02-05 10:14:00", "Type": "SELL", "Amount": 300, "BrokerCode": "ABX"}` and `{"CreatedTime": "2019-02-05 10:16:00", "Type": "SELL", "Amount": 300, "BrokerCode": "ABX"}` will be ignored by Spark.
+
+Key takeaways
+- Watermark is the key for state store cleanup
+- Events within the watermark is taken
+- Events outside the watermark may or may not be taken, depends on whether the windows state is cleanup or not.
+
+# Watermark and output modes
+State store cleanup
+1. Setting a watermark
+2. Using an appropriate output mode
+
+Output Modes
+1. Complete - State store kept forever, use with caution for aggregation. Watermark does not take effect here.
+2. Update - Upsert, produce new aggregates, emit those aggregates which are updated or changed. This is the most useful and efficient mode for streaming queries with streaming aggregates. This mode shouldn't be used with append only sinks such as file sink, it will result in duplicate records as Spark always create new files.
+3. Append - It suppress the output of the windowing aggregates until they cross the watermark boundary.
+
+# Sliding Window
+Almost the same as tumbling window expect the sliding window allows overlapping windows. In `window(col("CreatedTime"), "15 minute", "5 minute"))` the 3rd argument is the slide duration.
+
+# Joining Stream to static source (Cassandra database)
+To use cassandra, `.config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.1,org.apache.spark:spark-avro_2.12:3.0.1,com.datastax.spark:spark-cassandra-connector_2.12:3.0.0-beta"` is needed for Spark config.
+
+There is no streaming cassandra sink, but cassandra connector could be used to handle the write of each micro batch using a customized function.
+```
+output_df.writeStream \
+    .foreachBatch(write_to_cassandra)
+```
+
+# Joining Stream to another Stream, Streaming Watermark
+When stream joins with stream, every entry from both streams is kept in the state store. Watermark is needed to avoid OOM.
+
+Pay a little attention when designing the event model, as duplicates could happen if the joining key is not unique.
+
+# Streaming Outer Joins
+1. Left Outer - Left side must be a stream
+2. Right Outer - Right side must be a stream
+3. Full Outer - Not allowed
+
+Outer joins in Spark streaming (a workaround)
+- Left Outer
+  - Watermark on the right-side stream
+  - Maximum time range constraint between the left and right-side events
+- Right Outer
+  - Watermark on the left-side stream
+  - Maximum time range constraint between the left and right-side events
+
+The above mentioned "time range constraint" means the time delay between the impression and click events. It's implemented in the code as below condition. The unmatched records are sent only in the next micro-batch after the watermark expires.
+```
+join_expr = "ImpressionID == ClickID" + \
+    " AND ClickTime BETWEEN ImpressionTime AND ImpressionTime + interval 15 minute"
+```
